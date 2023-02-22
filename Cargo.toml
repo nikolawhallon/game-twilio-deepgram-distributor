@@ -1,0 +1,17 @@
+[package]
+name = "game-twilio-deepgram-distributor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.5.1", features = ["ws"] }
+axum-server = { version = "0.4.0", features = ["tls-rustls"] }
+base64 = "0.13.0"
+futures = "0.3.21"
+http = "0.2.6"
+rand = "0.8.5"
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+tokio = { version = "1.17.0", features = ["macros", "rt", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.15.0", features = ["native-tls"] }
+tungstenite = "0.14.0"
