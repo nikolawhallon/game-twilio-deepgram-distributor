@@ -49,6 +49,7 @@ async fn handle_to_game(
     state: Arc<State>,
     mut deepgram_receiver: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 ) {
+    println!("handle_to_game");
     let mut game_code: Option<String> = None;
 
     while let Some(Ok(msg)) = deepgram_receiver.next().await {
@@ -65,9 +66,11 @@ async fn handle_to_game(
             // parse the deepgram result to see if we have a game connected with the spoken game code
             if let tungstenite::Message::Text(msg) = msg.clone() {
                 // TODO: actually parse the deepgram result, and do something like:
-                // msg.contains(key)
-                if games.contains_key(&msg) {
-                    game_code = Some(msg);
+                // msg.something.something.transcript.contains(key)
+                for key in games.keys() {
+                    if msg.contains(key) {
+                        game_code = Some(key.clone());
+                    }
                 }
             }
         }
@@ -83,9 +86,7 @@ async fn handle_from_twilio(
 ) {
     let mut buffer_data = audio::BufferData {
         inbound_buffer: Vec::new(),
-        outbound_buffer: Vec::new(),
         inbound_last_timestamp: 0,
-        outbound_last_timestamp: 0,
     };
 
     while let Some(Ok(msg)) = this_receiver.next().await {
@@ -96,10 +97,10 @@ async fn handle_from_twilio(
                 match event.event_type {
                     twilio_response::EventType::Start(_start) => {}
                     twilio_response::EventType::Media(media) => {
-                        if let Some(mixed) = audio::process_twilio_media(media, &mut buffer_data) {
+                        if let Some(audio) = audio::process_twilio_media(media, &mut buffer_data) {
                             // send the audio on to deepgram
                             if deepgram_sender
-                                .send(Message::Binary(mixed).into())
+                                .send(Message::Binary(audio).into())
                                 .await
                                 .is_err()
                             {
