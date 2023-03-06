@@ -20,6 +20,12 @@ pub async fn game_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<State>) {
     let (mut game_sender, mut game_reader) = socket.split();
 
+    // tell the game the phone number to call
+    game_sender
+        .send(Message::Text(state.twilio_phone_number.clone()).into())
+        .await
+        .expect("Failed to send the phone number to the game.");
+
     let mut game_code = rand::thread_rng().gen_range(0..100).to_string();
 
     // we add this manual scoping so that we drop the games lock after this logic

@@ -21,6 +21,9 @@ async fn main() {
     let api_key =
         std::env::var("DEEPGRAM_API_KEY").expect("Using this server requires a Deepgram API Key.");
 
+    let twilio_phone_number = std::env::var("TWILIO_PHONE_NUMBER")
+        .expect("Using this server requires a Twilio phone number.");
+
     let cert_pem = std::env::var("CERT_PEM").ok();
     let key_pem = std::env::var("KEY_PEM").ok();
 
@@ -39,6 +42,7 @@ async fn main() {
     let state = Arc::new(state::State {
         deepgram_url,
         api_key,
+        twilio_phone_number,
         games: Mutex::new(HashMap::new()),
     });
 
