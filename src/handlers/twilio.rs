@@ -1,4 +1,5 @@
 use crate::audio;
+use crate::deepgram_response;
 use crate::message::Message;
 use crate::state::State;
 use crate::twilio_response;
@@ -65,12 +66,22 @@ async fn handle_to_game(
         } else {
             // parse the deepgram result to see if we have a game connected with the spoken game code
             if let tungstenite::Message::Text(msg) = msg.clone() {
-                // TODO: actually parse the deepgram result, and do something like:
-                // msg.something.something.transcript.contains(key)
-                for key in games.keys() {
-                    if msg.contains(key) {
-                        game_code = Some(key.clone());
+                let deepgram_response: Result<Vec<deepgram_response::StreamingResponse>, _> =
+                    serde_json::from_str(&msg);
+
+                match deepgram_response {
+                    Ok(deepgram_response) => {
+                        for result in deepgram_response {
+                            for alternative in result.channel.alternatives {
+                                for key in games.keys() {
+                                    if alternative.transcript.contains(key) {
+                                        game_code = Some(key.clone());
+                                    }
+                                }
+                            }
+                        }
                     }
+                    Err(_) => {}
                 }
             }
         }

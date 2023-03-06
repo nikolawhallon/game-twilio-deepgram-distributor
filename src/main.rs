@@ -4,6 +4,7 @@ use futures::lock::Mutex;
 use std::{collections::HashMap, sync::Arc};
 
 mod audio;
+mod deepgram_response;
 mod handlers;
 mod message;
 mod state;
