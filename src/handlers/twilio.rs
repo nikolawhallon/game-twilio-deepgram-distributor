@@ -24,10 +24,10 @@ pub async fn twilio_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<State>) {
-    // TODO: use this_sender to send audio to the caller's phone
-    let (_this_sender, this_receiver) = socket.split();
+    let (this_sender, this_receiver) = socket.split();
+    let (twilio_tx, twilio_rx) = crossbeam_channel::unbounded();
 
-    // prepare the connection request with the api key authentication
+    // prepare the deepgram connection request with the api key authentication
     let builder = http::Request::builder()
         .method(http::Method::GET)
         .uri(&state.deepgram_url);
@@ -42,22 +42,51 @@ async fn handle_socket(socket: WebSocket, state: Arc<State>) {
         .expect("Failed to connect to Deepgram.");
     let (deepgram_sender, deepgram_reader) = deepgram_socket.split();
 
-    tokio::spawn(handle_to_game(Arc::clone(&state), deepgram_reader));
-    tokio::spawn(handle_from_twilio(this_receiver, deepgram_sender));
+    tokio::spawn(handle_to_game_rx(
+        Arc::clone(&state),
+        deepgram_reader,
+        twilio_tx,
+    ));
+    tokio::spawn(handle_from_twilio_ws(this_receiver, deepgram_sender));
+    tokio::spawn(handle_from_twilio_tx(twilio_rx, this_sender));
 }
 
-async fn handle_to_game(
+/// when the game handler sends a message here via the twilio_tx,
+/// obtain TTS audio for the message and forward it to twilio via
+/// the twilio sender ws handle
+async fn handle_from_twilio_tx(
+    twilio_rx: crossbeam_channel::Receiver<Message>,
+    mut twilio_sender: SplitSink<WebSocket, axum::extract::ws::Message>,
+) {
+    while let Ok(message) = twilio_rx.recv() {
+        // TODO: get TTS audio from this text
+        let _ = twilio_sender.send(message.into()).await;
+    }
+}
+
+/// when we receive messages from deepgram, check to see what the user
+/// said, and if they say an active game code, patch them into the game handler
+/// via the GameTwilioTxs object - if they are patched, start sending
+/// deepgram ASR results to the game_rx (via the game_tx) so that the game handler
+/// can forward the results to the game via its game_sender ws handler
+///
+/// this function also takes the twilio_tx to populate the GameTwilioTxs object
+/// once the user says a game code
+async fn handle_to_game_rx(
     state: Arc<State>,
     mut deepgram_receiver: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    twilio_tx: crossbeam_channel::Sender<Message>,
 ) {
     let mut game_code: Option<String> = None;
 
     while let Some(Ok(msg)) = deepgram_receiver.next().await {
         let mut games = state.games.lock().await;
         if let Some(game_code) = game_code.as_ref() {
-            if let Some(game_ws) = games.get_mut(game_code) {
+            if let Some(game_twilio_tx) = games.get_mut(game_code) {
                 // send the message to the game
-                let _ = game_ws.send(Message::from(msg.clone()).into()).await;
+                let _ = game_twilio_tx
+                    .game_tx
+                    .send(Message::from(msg.clone()).into());
             } else {
                 // this game existed, and no longer exists, so close the connection(s)?
                 // or just make game "None" again
@@ -80,12 +109,22 @@ async fn handle_to_game(
                     }
                     Err(_) => {}
                 }
+
+                // if game_code was just populated, then we can finally finish connecting our twilio and game handlers
+                if let Some(game_code) = game_code.clone() {
+                    if let Some(game_twilio_tx) = games.get_mut(&game_code) {
+                        game_twilio_tx.twilio_tx = Some(twilio_tx.clone());
+                    }
+                }
             }
         }
     }
 }
 
-async fn handle_from_twilio(
+/// when we receive a message from twilio via the this_receiver ws handle,
+/// process the media and forward it directly to deepgram via
+/// the deepgram_sender ws handle
+async fn handle_from_twilio_ws(
     mut this_receiver: SplitStream<WebSocket>,
     mut deepgram_sender: SplitSink<
         WebSocketStream<MaybeTlsStream<TcpStream>>,
