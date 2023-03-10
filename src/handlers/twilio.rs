@@ -169,6 +169,11 @@ async fn handle_to_game_rx(
                 if let Some(game_code) = game_code.clone() {
                     if let Some(game_twilio_tx) = games.get_mut(&game_code) {
                         game_twilio_tx.twilio_tx = Some(twilio_tx.clone());
+
+                        // send a message to the game to let it know a phone has connected
+                        let _ = game_twilio_tx
+                            .game_tx
+                            .send(Message::Text("connected".to_string()).into());
                     }
                 }
             }

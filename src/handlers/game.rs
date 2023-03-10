@@ -89,6 +89,8 @@ async fn handle_from_game_ws(
     state: Arc<State>,
     mut game_reader: SplitStream<WebSocket>,
 ) {
+    // TODO: I should note that somehow I think I got this server in a bad state by sending it binary
+    // data here - I don't know how that happened, but I'm keeping this comment to remind me to investigate
     while let Some(Ok(msg)) = game_reader.next().await {
         match msg {
             axum::extract::ws::Message::Close(_) => {
