@@ -1,4 +1,5 @@
 use crate::twilio_response;
+use base64::{engine::general_purpose, Engine};
 
 const MULAW_SILENCE: u8 = 0xff;
 const MULAW_BYTES_PER_MS: usize = 8;
@@ -32,7 +33,7 @@ pub fn process_twilio_media(
 ) -> Option<Vec<u8>> {
     // NOTE: when Twilio sends media data, it should send TWILIO_MS_PER_CHUNK = 20 ms audio chunks
     // at a time, where each ms of audio is MULAW_BYTES_PER_MS = 8 bytes
-    let media_chunk = base64::decode(media.payload).unwrap();
+    let media_chunk = general_purpose::STANDARD.decode(media.payload).unwrap();
     let media_chunk_size = media_chunk.len();
     if media_chunk_size != TWILIO_MS_PER_CHUNK * MULAW_BYTES_PER_MS {
         // here, the Twilio media chunk size is not the expected size of TWILIO_MS_PER_CHUNK * MULAW_BYTES_PER_MS bytes

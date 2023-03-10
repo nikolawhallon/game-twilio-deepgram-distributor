@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
+use base64::{engine::general_purpose, Engine};
 use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
@@ -105,7 +106,16 @@ async fn handle_from_twilio_tx(
                         .expect("failed to write to file");
 
                     // base64 encode the mulaw, wrap it in a Twilio media message, and send it to Twilio
-
+                    let _base64_encoded_mulaw = general_purpose::STANDARD.encode(&mulaw_samples);
+                    /*
+                    {
+                      "event": "media",
+                      "streamSid": "MZ18ad3ab5a668481ce02b83e7395059f0",
+                      "media": {
+                        "payload": "a3242sadfasfa423242... (a base64 encoded string of 8000/mulaw)"
+                      }
+                    }
+                     */
                     //let _ = twilio_sender.send(message.into()).await;
                 }
             }
