@@ -3,6 +3,8 @@ use crate::deepgram_response;
 use crate::message::Message;
 use crate::state::State;
 use crate::twilio_response;
+use aws_sdk_polly::model::{OutputFormat, VoiceId};
+use aws_sdk_polly::Client;
 use axum::{
     extract::ws::{WebSocket, WebSocketUpgrade},
     response::IntoResponse,
@@ -13,6 +15,7 @@ use futures::{
     stream::{SplitSink, SplitStream, StreamExt},
 };
 use std::{convert::From, sync::Arc};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -59,19 +62,61 @@ async fn handle_from_twilio_tx(
     _twilio_sender: SplitSink<WebSocket, axum::extract::ws::Message>,
 ) {
     while let Ok(message) = twilio_rx.recv() {
-        // TODO: get TTS audio from this text and send it to the twilio sender
-        //let _ = twilio_sender.send(message.into()).await;
-        println!(
-            "Got a text message to convert into TTS to send to Twilio: {:?}",
-            message
-        );
+        if let Message::Text(message) = message {
+            let shared_config = aws_config::from_env().load().await;
+            let client = Client::new(&shared_config);
+
+            if let Ok(polly_response) = client
+                .synthesize_speech()
+                .output_format(OutputFormat::Pcm)
+                .sample_rate("8000")
+                .text(message)
+                .voice_id(VoiceId::Joanna)
+                .send()
+                .await
+            {
+                if let Ok(pcm) = polly_response
+                    .audio_stream
+                    .collect()
+                    .await
+                    .and_then(|aggregated_bytes| Ok(aggregated_bytes.to_vec()))
+                {
+                    let mut i16_samples = Vec::new();
+                    for i in 0..(pcm.len() / 2) {
+                        let mut i16_sample = pcm[i * 2] as i16;
+                        i16_sample |= ((pcm[i * 2 + 1]) as i16) << 8;
+                        i16_samples.push(i16_sample);
+                    }
+
+                    let mut mulaw_samples = Vec::new();
+                    for sample in i16_samples {
+                        mulaw_samples.push(audio::linear_to_ulaw(sample));
+                    }
+
+                    // remove this soon, it is just for testing that the TTS and mulaw conversion are working
+                    let out_file = "test.mulaw";
+
+                    let mut file = tokio::fs::File::create(out_file)
+                        .await
+                        .expect("failed to create file");
+
+                    file.write_all_buf(&mut mulaw_samples.as_slice())
+                        .await
+                        .expect("failed to write to file");
+
+                    // base64 encode the mulaw, wrap it in a Twilio media message, and send it to Twilio
+
+                    //let _ = twilio_sender.send(message.into()).await;
+                }
+            }
+        }
     }
 }
 
 /// when we receive messages from deepgram, check to see what the user
-/// said, and if they say an active game code, patch them into the game handler
+/// said, and if they say an active game code, patch them into the game ws handler
 /// via the GameTwilioTxs object - if they are patched, start sending
-/// deepgram ASR results to the game_rx (via the game_tx) so that the game handler
+/// deepgram ASR results to the game_rx (via the game_tx) so that the game ws handler
 /// can forward the results to the game via its game_sender ws handler
 ///
 /// this function also takes the twilio_tx to populate the GameTwilioTxs object

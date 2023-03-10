@@ -64,3 +64,28 @@ pub fn process_twilio_media(
         None
     }
 }
+
+// taken from: https://github.com/buosseph/audio/blob/master/src/codecs/g711.rs
+// with one modification to handle overflow arithmetic
+pub fn linear_to_ulaw(sample: i16) -> u8 {
+    let mut pcm_value = sample;
+    let sign = (pcm_value >> 8) & 0x80;
+    if sign != 0 {
+        if pcm_value.checked_mul(-1).is_some() {
+            pcm_value *= -1;
+        }
+    }
+    if pcm_value > 32635 {
+        pcm_value = 32635;
+    }
+    pcm_value += 0x84;
+    let mut exponent: i16 = 7;
+    let mut mask = 0x4000;
+    while pcm_value & mask == 0 {
+        exponent -= 1;
+        mask >>= 1;
+    }
+    let manitssa: i16 = (pcm_value >> (exponent + 3)) & 0x0f;
+    let ulaw_value = sign | exponent << 4 | manitssa;
+    (!ulaw_value) as u8
+}
