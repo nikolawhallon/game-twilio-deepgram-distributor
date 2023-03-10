@@ -50,3 +50,26 @@ pub struct EventMedia {
     pub timestamp: String,
     pub payload: String,
 }
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct Media {
+    pub payload: String,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SendingMedia {
+    event: String,
+    stream_sid: String,
+    media: Media,
+}
+
+impl SendingMedia {
+    pub fn new(stream_sid: String, payload: String) -> Self {
+        SendingMedia {
+            event: "media".to_string(),
+            stream_sid,
+            media: Media { payload },
+        }
+    }
+}

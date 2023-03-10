@@ -11,12 +11,12 @@ use axum::{
     Extension,
 };
 use base64::{engine::general_purpose, Engine};
+use futures::channel::oneshot;
 use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
 use std::{convert::From, sync::Arc};
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -46,13 +46,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<State>) {
         .expect("Failed to connect to Deepgram.");
     let (deepgram_sender, deepgram_reader) = deepgram_socket.split();
 
+    let (streamsid_tx, streamsid_rx) = oneshot::channel::<String>();
+
     tokio::spawn(handle_to_game_rx(
         Arc::clone(&state),
         deepgram_reader,
         twilio_tx,
     ));
-    tokio::spawn(handle_from_twilio_ws(this_receiver, deepgram_sender));
-    tokio::spawn(handle_from_twilio_tx(twilio_rx, this_sender));
+    tokio::spawn(handle_from_twilio_ws(
+        this_receiver,
+        deepgram_sender,
+        streamsid_tx,
+    ));
+    tokio::spawn(handle_from_twilio_tx(twilio_rx, this_sender, streamsid_rx));
 }
 
 /// when the game handler sends a message here via the twilio_tx,
@@ -60,8 +66,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<State>) {
 /// the twilio sender ws handle
 async fn handle_from_twilio_tx(
     twilio_rx: crossbeam_channel::Receiver<Message>,
-    _twilio_sender: SplitSink<WebSocket, axum::extract::ws::Message>,
+    mut twilio_sender: SplitSink<WebSocket, axum::extract::ws::Message>,
+    streamsid_rx: oneshot::Receiver<String>,
 ) {
+    let streamsid = streamsid_rx
+        .await
+        .expect("Failed to receive streamsid from handle_from_twilio_ws.");
+
     while let Ok(message) = twilio_rx.recv() {
         if let Message::Text(message) = message {
             let shared_config = aws_config::from_env().load().await;
@@ -94,29 +105,15 @@ async fn handle_from_twilio_tx(
                         mulaw_samples.push(audio::linear_to_ulaw(sample));
                     }
 
-                    // remove this soon, it is just for testing that the TTS and mulaw conversion are working
-                    let out_file = "test.mulaw";
-
-                    let mut file = tokio::fs::File::create(out_file)
-                        .await
-                        .expect("failed to create file");
-
-                    file.write_all_buf(&mut mulaw_samples.as_slice())
-                        .await
-                        .expect("failed to write to file");
-
                     // base64 encode the mulaw, wrap it in a Twilio media message, and send it to Twilio
-                    let _base64_encoded_mulaw = general_purpose::STANDARD.encode(&mulaw_samples);
-                    /*
-                    {
-                      "event": "media",
-                      "streamSid": "MZ18ad3ab5a668481ce02b83e7395059f0",
-                      "media": {
-                        "payload": "a3242sadfasfa423242... (a base64 encoded string of 8000/mulaw)"
-                      }
-                    }
-                     */
-                    //let _ = twilio_sender.send(message.into()).await;
+                    let base64_encoded_mulaw = general_purpose::STANDARD.encode(&mulaw_samples);
+
+                    let sending_media =
+                        twilio_response::SendingMedia::new(streamsid.clone(), base64_encoded_mulaw);
+
+                    let _ = twilio_sender
+                        .send(Message::Text(serde_json::to_string(&sending_media).unwrap()).into())
+                        .await;
                 }
             }
         }
@@ -188,11 +185,15 @@ async fn handle_from_twilio_ws(
         WebSocketStream<MaybeTlsStream<TcpStream>>,
         tokio_tungstenite::tungstenite::Message,
     >,
+    streamsid_tx: oneshot::Sender<String>,
 ) {
     let mut buffer_data = audio::BufferData {
         inbound_buffer: Vec::new(),
         inbound_last_timestamp: 0,
     };
+
+    // wrap our oneshot in an Option because we will need it in a loop
+    let mut streamsid_tx = Some(streamsid_tx);
 
     while let Some(Ok(msg)) = this_receiver.next().await {
         let msg = Message::from(msg);
@@ -200,7 +201,14 @@ async fn handle_from_twilio_ws(
             let event: Result<twilio_response::Event, _> = serde_json::from_str(&msg);
             if let Ok(event) = event {
                 match event.event_type {
-                    twilio_response::EventType::Start(_start) => {}
+                    twilio_response::EventType::Start(start) => {
+                        // sending this streamsid on our oneshot will let `handle_to_game_rx` know the streamsid
+                        if let Some(streamsid_tx) = streamsid_tx.take() {
+                            streamsid_tx
+                                .send(start.stream_sid.clone())
+                                .expect("Failed to send streamsid to handle_to_game_rx.");
+                        }
+                    }
                     twilio_response::EventType::Media(media) => {
                         if let Some(audio) = audio::process_twilio_media(media, &mut buffer_data) {
                             // send the audio on to deepgram
